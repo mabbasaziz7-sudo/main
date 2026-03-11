@@ -77,6 +77,7 @@ export default function App() {
             const connected = await sb.testConnection();
             if (connected) {
               setIsCloudConnected(true);
+              // Load data from cloud
               const data = await sb.loadAllData();
               if (data) {
                 if (data.orders?.length) setOrders(data.orders);
@@ -88,6 +89,12 @@ export default function App() {
                 if (data.currencies?.length) setCurrencies(data.currencies);
                 if (data.settings) setSettings(data.settings);
               }
+              // Enable sync AFTER loading to prevent re-upload of loaded data
+              setTimeout(() => {
+                sb.enableSync();
+                isInitialLoad.current = false;
+              }, 2000);
+              return;
             }
           }
         } catch (e) {
@@ -99,44 +106,44 @@ export default function App() {
     init();
   }, []);
 
-  // Cloud sync effects
+  // Cloud sync effects - only sync when syncEnabled AND not initial load
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncOrders(orders);
   }, [orders, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncCustomers(customers);
   }, [customers, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncParts(parts);
   }, [parts, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncTransactions(transactions);
   }, [transactions, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncProcedures(procedures);
   }, [procedures, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncUsers(appUsers);
   }, [appUsers, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncCurrencies(currencies);
   }, [currencies, isCloudConnected]);
 
   useEffect(() => {
-    if (!isCloudConnected || isInitialLoad.current) return;
+    if (!isCloudConnected || isInitialLoad.current || !sb.isSyncEnabled()) return;
     sb.syncSettings(settings);
   }, [settings, isCloudConnected]);
 
@@ -146,11 +153,7 @@ export default function App() {
         const connected = await sb.testConnection();
         if (connected) {
           setIsCloudConnected(true);
-          // Upload local data to cloud on first connect
-          await sb.uploadAllData({
-            orders, customers, parts, transactions, procedures,
-            users: appUsers, currencies, settings,
-          });
+          sb.enableSync();
           return true;
         }
       }
@@ -160,8 +163,8 @@ export default function App() {
     return false;
   };
 
-  const handleUploadData = async (): Promise<boolean> => {
-    if (!isCloudConnected) return false;
+  const handleUploadData = async (): Promise<{ success: boolean; errors: string[] }> => {
+    if (!isCloudConnected) return { success: false, errors: ['غير متصل'] };
     return await sb.uploadAllData({
       orders, customers, parts, transactions, procedures,
       users: appUsers, currencies, settings,
@@ -171,6 +174,8 @@ export default function App() {
   const handleDownloadData = async (): Promise<boolean> => {
     if (!isCloudConnected) return false;
     try {
+      // Temporarily disable sync to prevent re-upload while downloading
+      sb.disableSync();
       const data = await sb.loadAllData();
       if (data) {
         if (data.orders?.length) setOrders(data.orders);
@@ -181,10 +186,16 @@ export default function App() {
         if (data.users?.length) setAppUsers(data.users);
         if (data.currencies?.length) setCurrencies(data.currencies);
         if (data.settings) setSettings(data.settings);
+        // Re-enable sync after state updates settle
+        setTimeout(() => sb.enableSync(), 2000);
         return true;
       }
+      sb.enableSync();
       return false;
-    } catch { return false; }
+    } catch {
+      sb.enableSync();
+      return false;
+    }
   };
 
   // Filter menu items based on permissions
