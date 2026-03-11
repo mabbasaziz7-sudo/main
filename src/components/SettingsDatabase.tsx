@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Database, AlertTriangle, Cloud, CloudOff, RefreshCw, Wrench, Check, Copy, Upload, Download, ExternalLink, ChevronDown, ChevronUp, Zap, Globe, Shield, BookOpen } from 'lucide-react';
+import { Database, AlertTriangle, Cloud, CloudOff, RefreshCw, Check, Copy, Upload, Download, ExternalLink, ChevronDown, ChevronUp, Zap, Globe, Shield, BookOpen, Activity, Wrench, X } from 'lucide-react';
+import { getSyncLog } from '../supabase';
 
 export interface SupabaseConfig {
   url: string;
@@ -9,23 +10,23 @@ export interface SupabaseConfig {
 interface Props {
   onConnect: (config: SupabaseConfig) => Promise<boolean>;
   isConnected: boolean;
-  onUploadData?: () => Promise<boolean>;
+  onUploadData?: () => Promise<{ success: boolean; errors: string[] }>;
   onDownloadData?: () => Promise<boolean>;
 }
 
 const SQL_SCHEMA = `-- ============================================
 -- نظام إدارة مركز الصيانة - Supabase Schema
--- قم بتشغيل هذا الملف في Supabase SQL Editor
+-- قم بنسخ هذا الكود ولصقه في SQL Editor
 -- ============================================
 
--- جدول الإعدادات
+-- 1. جدول الإعدادات
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value JSONB,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- جدول العملاء
+-- 2. جدول العملاء
 CREATE TABLE IF NOT EXISTS customers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -35,50 +36,48 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at TEXT
 );
 
--- جدول أوامر الصيانة
+-- 3. جدول أوامر الصيانة
 CREATE TABLE IF NOT EXISTS orders (
   id TEXT PRIMARY KEY,
-  order_number TEXT UNIQUE,
-  customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
+  order_number TEXT,
+  customer_id TEXT,
   customer_name TEXT,
   device_type TEXT,
   device_brand TEXT,
   device_model TEXT,
-  serial_number TEXT,
+  serial_number TEXT DEFAULT '',
   problem_description TEXT,
   status TEXT DEFAULT 'received',
   received_date TEXT,
-  expected_date TEXT,
-  delivered_date TEXT,
+  expected_date TEXT DEFAULT '',
+  delivered_date TEXT DEFAULT '',
   estimated_cost NUMERIC DEFAULT 0,
   final_cost NUMERIC DEFAULT 0,
-  notes TEXT,
-  accessories TEXT,
-  device_condition TEXT,
-  assigned_technician TEXT,
+  notes TEXT DEFAULT '',
+  accessories TEXT DEFAULT '',
+  device_condition TEXT DEFAULT '',
+  assigned_technician TEXT DEFAULT '',
   priority TEXT DEFAULT 'medium',
   is_paid BOOLEAN DEFAULT FALSE,
-  paid_amount NUMERIC DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  paid_amount NUMERIC DEFAULT 0
 );
 
--- جدول الدفعات
+-- 4. جدول الدفعات
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY,
-  order_id TEXT REFERENCES orders(id) ON DELETE CASCADE,
+  order_id TEXT,
   order_number TEXT,
   amount NUMERIC DEFAULT 0,
   date TEXT,
   payment_method TEXT,
-  notes TEXT,
-  type TEXT DEFAULT 'partial',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  notes TEXT DEFAULT '',
+  type TEXT DEFAULT 'partial'
 );
 
--- جدول إجراءات الصيانة
+-- 5. جدول إجراءات الصيانة
 CREATE TABLE IF NOT EXISTS maintenance_actions (
   id TEXT PRIMARY KEY,
-  order_id TEXT REFERENCES orders(id) ON DELETE CASCADE,
+  order_id TEXT,
   order_number TEXT,
   description TEXT,
   technician_name TEXT,
@@ -87,43 +86,41 @@ CREATE TABLE IF NOT EXISTS maintenance_actions (
   status TEXT DEFAULT 'pending',
   parts_used JSONB DEFAULT '[]',
   labor_cost NUMERIC DEFAULT 0,
-  notes TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  notes TEXT DEFAULT ''
 );
 
--- جدول قطع الغيار
+-- 6. جدول قطع الغيار
 CREATE TABLE IF NOT EXISTS spare_parts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  category TEXT,
-  part_number TEXT,
+  category TEXT DEFAULT '',
+  part_number TEXT DEFAULT '',
   quantity INTEGER DEFAULT 0,
   min_quantity INTEGER DEFAULT 0,
   purchase_price NUMERIC DEFAULT 0,
   selling_price NUMERIC DEFAULT 0,
-  supplier TEXT,
-  location TEXT
+  supplier TEXT DEFAULT '',
+  location TEXT DEFAULT ''
 );
 
--- جدول المعاملات المالية
+-- 7. جدول المعاملات المالية
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
   order_id TEXT,
-  type TEXT CHECK (type IN ('income', 'expense')),
-  category TEXT,
+  type TEXT,
+  category TEXT DEFAULT '',
   amount NUMERIC DEFAULT 0,
   date TEXT,
-  description TEXT,
-  payment_method TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  description TEXT DEFAULT '',
+  payment_method TEXT DEFAULT ''
 );
 
--- جدول العملات
+-- 8. جدول العملات
 CREATE TABLE IF NOT EXISTS currencies (
   id TEXT PRIMARY KEY,
-  code TEXT UNIQUE,
+  code TEXT,
   name_ar TEXT,
-  name_en TEXT,
+  name_en TEXT DEFAULT '',
   symbol TEXT,
   exchange_rate NUMERIC DEFAULT 1,
   is_default BOOLEAN DEFAULT FALSE,
@@ -131,59 +128,50 @@ CREATE TABLE IF NOT EXISTS currencies (
   symbol_position TEXT DEFAULT 'after'
 );
 
--- جدول المستخدمين
+-- 9. جدول المستخدمين
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  username TEXT UNIQUE NOT NULL,
+  username TEXT NOT NULL,
   password TEXT NOT NULL,
   full_name TEXT,
-  email TEXT,
-  phone TEXT,
+  email TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
   role TEXT DEFAULT 'technician',
-  avatar TEXT,
+  avatar TEXT DEFAULT '',
   is_active BOOLEAN DEFAULT TRUE,
   created_at TEXT,
-  last_login TEXT,
+  last_login TEXT DEFAULT '',
   permissions JSONB DEFAULT '{}'
 );
 
 -- ============================================
--- فهارس لتسريع البحث
+-- تعطيل RLS لجميع الجداول (مطلوب للعمل)
 -- ============================================
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
-CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(received_date);
-CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
-CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
-CREATE INDEX IF NOT EXISTS idx_maintenance_order ON maintenance_actions(order_id);
+ALTER TABLE settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE customers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE payments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE maintenance_actions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE spare_parts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE transactions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE currencies DISABLE ROW LEVEL SECURITY;
+ALTER TABLE users DISABLE ROW LEVEL SECURITY;
 
 -- ============================================
--- تفعيل RLS (Row Level Security)
+-- منح صلاحيات كاملة
 -- ============================================
-ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE maintenance_actions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE spare_parts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE currencies ENABLE ROW LEVEL SECURITY;
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-
--- سياسة الوصول المفتوح (للتطوير - غيّرها للإنتاج)
-CREATE POLICY "Allow all" ON settings FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON customers FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON orders FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON payments FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON maintenance_actions FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON spare_parts FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON transactions FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON currencies FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON users FOR ALL USING (true) WITH CHECK (true);
+GRANT ALL ON settings TO anon, authenticated;
+GRANT ALL ON customers TO anon, authenticated;
+GRANT ALL ON orders TO anon, authenticated;
+GRANT ALL ON payments TO anon, authenticated;
+GRANT ALL ON maintenance_actions TO anon, authenticated;
+GRANT ALL ON spare_parts TO anon, authenticated;
+GRANT ALL ON transactions TO anon, authenticated;
+GRANT ALL ON currencies TO anon, authenticated;
+GRANT ALL ON users TO anon, authenticated;
 
 -- ============================================
--- ✅ تم إنشاء جميع الجداول بنجاح!
+-- ✅ تم! يمكنك الآن الاتصال من التطبيق
 -- ============================================`;
 
 export default function SettingsDatabase({ onConnect, isConnected, onUploadData, onDownloadData }: Props) {
@@ -192,10 +180,12 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showSQL, setShowSQL] = useState(false);
-  const [showGuide, setShowGuide] = useState(false);
+  const [showGuide, setShowGuide] = useState(!isConnected);
   const [copied, setCopied] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncDirection, setSyncDirection] = useState<'up' | 'down' | null>(null);
+  const [showLog, setShowLog] = useState(false);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
 
   useEffect(() => {
     const saved = localStorage.getItem('supabaseConfig');
@@ -207,12 +197,14 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
   const showSuccessMsg = (msg: string) => {
     setSuccess(msg);
     setError(null);
-    setTimeout(() => setSuccess(null), 4000);
+    setUploadErrors([]);
+    setTimeout(() => setSuccess(null), 5000);
   };
 
   const handleConnect = async () => {
     setError(null);
     setSuccess(null);
+    setUploadErrors([]);
     setLoading(true);
 
     if (!config.url || !config.anonKey) {
@@ -221,7 +213,6 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
       return;
     }
 
-    // Validate URL format
     if (!config.url.startsWith('https://') || !config.url.includes('.supabase.co')) {
       setError('رابط المشروع غير صحيح. يجب أن يكون بالشكل: https://xxxxx.supabase.co');
       setLoading(false);
@@ -232,9 +223,9 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
       const result = await onConnect(config);
       if (result) {
         localStorage.setItem('supabaseConfig', JSON.stringify(config));
-        showSuccessMsg('تم الاتصال بنجاح! يتم الآن مزامنة البيانات.');
+        showSuccessMsg('✅ تم الاتصال بنجاح! اضغط "رفع البيانات للسحابة" لنقل بياناتك.');
       } else {
-        setError('فشل الاتصال. تأكد من صحة البيانات وأن الجداول موجودة. قم بتنفيذ ملف SQL أولاً.');
+        setError('فشل الاتصال. تأكد من:\n1. صحة رابط المشروع والمفتاح\n2. تنفيذ ملف SQL في SQL Editor\n3. تعطيل RLS (موجود في الملف SQL)');
       }
     } catch (err) {
       setError('خطأ: ' + (err as Error).message);
@@ -259,15 +250,24 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
 
   const handleUploadData = async () => {
     if (!onUploadData) return;
-    if (!confirm('سيتم رفع جميع البيانات المحلية إلى Supabase.\nالبيانات الموجودة على السحابة سيتم تحديثها.\n\nهل تريد المتابعة؟')) return;
+    if (!confirm('سيتم رفع جميع البيانات المحلية إلى Supabase.\nالبيانات الموجودة على السحابة سيتم استبدالها.\n\nهل تريد المتابعة؟')) return;
     setSyncing(true);
     setSyncDirection('up');
+    setUploadErrors([]);
     try {
       const result = await onUploadData();
-      if (result) showSuccessMsg('تم رفع جميع البيانات بنجاح!');
-      else setError('حدث خطأ أثناء رفع البيانات');
-    } catch { setError('خطأ في الرفع'); }
-    finally { setSyncing(false); setSyncDirection(null); }
+      if (result.success) {
+        showSuccessMsg('✅ تم رفع جميع البيانات بنجاح!');
+      } else {
+        setUploadErrors(result.errors);
+        setError('حدثت أخطاء أثناء الرفع. راجع التفاصيل أدناه.');
+      }
+    } catch (e) {
+      setError('خطأ في الرفع: ' + (e as Error).message);
+    } finally {
+      setSyncing(false);
+      setSyncDirection(null);
+    }
   };
 
   const handleDownloadData = async () => {
@@ -277,10 +277,14 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
     setSyncDirection('down');
     try {
       const result = await onDownloadData();
-      if (result) showSuccessMsg('تم تحميل البيانات بنجاح! جاري إعادة التحميل...');
-      else setError('حدث خطأ أثناء تحميل البيانات');
-    } catch { setError('خطأ في التحميل'); }
-    finally { setSyncing(false); setSyncDirection(null); }
+      if (result) showSuccessMsg('✅ تم تحميل البيانات بنجاح!');
+      else setError('لا توجد بيانات على السحابة أو حدث خطأ');
+    } catch (e) {
+      setError('خطأ في التحميل: ' + (e as Error).message);
+    } finally {
+      setSyncing(false);
+      setSyncDirection(null);
+    }
   };
 
   const inputClass = "w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-gray-50 hover:bg-white transition-colors font-mono text-xs";
@@ -288,18 +292,51 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className="p-3 bg-emerald-50 rounded-xl">
-          <Database className="w-6 h-6 text-emerald-600" />
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="p-3 bg-emerald-50 rounded-xl">
+            <Database className="w-6 h-6 text-emerald-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">قاعدة بيانات Supabase</h2>
+            <p className="text-sm text-gray-500">ربط النظام بقاعدة بيانات PostgreSQL سحابية مجانية</p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-            قاعدة بيانات Supabase
-            <img src="https://supabase.com/favicon/favicon-32x32.png" alt="Supabase" className="w-5 h-5" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-          </h2>
-          <p className="text-sm text-gray-500">ربط النظام بقاعدة بيانات PostgreSQL سحابية مجانية</p>
-        </div>
+        <button onClick={() => setShowLog(!showLog)}
+          className="flex items-center gap-2 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-lg transition-colors">
+          <Activity className="w-3.5 h-3.5" />
+          سجل المزامنة
+        </button>
       </div>
+
+      {/* Sync Log */}
+      {showLog && (
+        <div className="bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 animate-fadeIn">
+          <div className="flex items-center justify-between p-3 border-b border-slate-700">
+            <span className="text-sm text-slate-300 font-bold flex items-center gap-2">
+              <Activity className="w-4 h-4 text-emerald-400" /> سجل المزامنة
+            </span>
+            <button onClick={() => setShowLog(false)} className="text-slate-500 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="max-h-60 overflow-y-auto p-3 space-y-1">
+            {getSyncLog().length === 0 ? (
+              <p className="text-slate-500 text-xs text-center py-4">لا توجد عمليات بعد</p>
+            ) : (
+              getSyncLog().map((log, i) => (
+                <div key={i} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded ${log.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+                  <span className="text-slate-500 font-mono">{log.time}</span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${log.status === 'ok' ? 'bg-green-400' : 'bg-red-400'}`} />
+                  <span className="text-slate-300 font-medium">{log.action}</span>
+                  <span className="text-slate-500">-</span>
+                  <span>{log.message}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Connection Status */}
       <div className={`rounded-2xl p-6 text-white shadow-lg transition-all ${isConnected ? 'bg-gradient-to-br from-emerald-600 to-green-700' : 'bg-gradient-to-br from-slate-700 to-slate-800'}`}>
@@ -315,46 +352,60 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               <p className="text-slate-200 text-sm mt-1">
                 {isConnected
                   ? 'البيانات تتم مزامنتها تلقائياً مع قاعدة البيانات السحابية'
-                  : 'يعمل النظام على التخزين المحلي فقط (بيانات المتصفح)'
-                }
+                  : 'يعمل النظام على التخزين المحلي فقط (بيانات المتصفح)'}
               </p>
             </div>
           </div>
           {isConnected && (
-            <div className="flex gap-2">
-              <button onClick={handleDisconnect}
-                className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all border border-white/20">
-                قطع الاتصال
-              </button>
-            </div>
+            <button onClick={handleDisconnect}
+              className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all border border-white/20">
+              قطع الاتصال
+            </button>
           )}
         </div>
       </div>
 
-      {/* Sync Buttons (when connected) */}
+      {/* Sync Buttons */}
       {isConnected && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button onClick={handleUploadData} disabled={syncing}
-            className="bg-white rounded-xl border-2 border-blue-200 p-5 hover:border-blue-400 hover:shadow-lg transition-all text-right group">
+            className="bg-white rounded-xl border-2 border-blue-200 p-5 hover:border-blue-400 hover:shadow-lg transition-all text-right group disabled:opacity-50">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-blue-100 rounded-lg group-hover:bg-blue-200 transition-colors">
                 {syncing && syncDirection === 'up' ? <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" /> : <Upload className="w-5 h-5 text-blue-600" />}
               </div>
-              <span className="font-bold text-gray-800">رفع البيانات للسحابة</span>
+              <span className="font-bold text-gray-800">⬆️ رفع البيانات للسحابة</span>
             </div>
-            <p className="text-xs text-gray-500">رفع جميع البيانات المحلية إلى Supabase</p>
+            <p className="text-xs text-gray-500">رفع جميع البيانات المحلية إلى Supabase (يستبدل البيانات الموجودة)</p>
           </button>
 
           <button onClick={handleDownloadData} disabled={syncing}
-            className="bg-white rounded-xl border-2 border-green-200 p-5 hover:border-green-400 hover:shadow-lg transition-all text-right group">
+            className="bg-white rounded-xl border-2 border-green-200 p-5 hover:border-green-400 hover:shadow-lg transition-all text-right group disabled:opacity-50">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-green-100 rounded-lg group-hover:bg-green-200 transition-colors">
                 {syncing && syncDirection === 'down' ? <RefreshCw className="w-5 h-5 text-green-600 animate-spin" /> : <Download className="w-5 h-5 text-green-600" />}
               </div>
-              <span className="font-bold text-gray-800">تحميل من السحابة</span>
+              <span className="font-bold text-gray-800">⬇️ تحميل من السحابة</span>
             </div>
             <p className="text-xs text-gray-500">تحميل البيانات من Supabase واستبدال البيانات المحلية</p>
           </button>
+        </div>
+      )}
+
+      {/* Upload Errors */}
+      {uploadErrors.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 animate-fadeIn">
+          <h4 className="text-sm font-bold text-red-700 mb-2 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" /> أخطاء الرفع:
+          </h4>
+          <ul className="space-y-1">
+            {uploadErrors.map((err, i) => (
+              <li key={i} className="text-xs text-red-600 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
+                {err}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -376,7 +427,7 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               <div className="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-700">1</div>
               <div>
                 <h4 className="font-bold text-gray-800 mb-1">إنشاء حساب على Supabase</h4>
-                <p className="text-sm text-gray-600 mb-2">اذهب إلى الرابط التالي وسجّل بحسابك على GitHub:</p>
+                <p className="text-sm text-gray-600 mb-2">اذهب للرابط التالي وسجّل بحسابك على GitHub:</p>
                 <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer"
                   className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-colors border border-emerald-200">
                   <ExternalLink className="w-4 h-4" /> supabase.com/dashboard
@@ -389,27 +440,32 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               <div className="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-700">2</div>
               <div>
                 <h4 className="font-bold text-gray-800 mb-1">إنشاء مشروع جديد</h4>
-                <p className="text-sm text-gray-600">اضغط "New Project" واختر اسماً وكلمة مرور ومنطقة قريبة منك.</p>
-                <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span><strong>مهم:</strong> اختر منطقة قريبة (مثل: eu-central أو ap-southeast) لأداء أفضل.</span>
-                </div>
+                <p className="text-sm text-gray-600">اضغط "New Project" واختر اسماً وكلمة مرور ومنطقة قريبة.</p>
               </div>
             </div>
 
             {/* Step 3 */}
             <div className="flex gap-4">
-              <div className="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-700">3</div>
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center font-bold text-red-700">3</div>
               <div>
-                <h4 className="font-bold text-gray-800 mb-1">إنشاء الجداول</h4>
+                <h4 className="font-bold text-gray-800 mb-1">⚠️ مهم جداً: إنشاء الجداول</h4>
                 <p className="text-sm text-gray-600 mb-2">
-                  من القائمة الجانبية اذهب إلى <strong>"SQL Editor"</strong> ثم انسخ الكود أدناه والصقه وشغّله:
+                  من القائمة الجانبية اذهب إلى <strong>"SQL Editor"</strong> ← ثم <strong>"New Query"</strong>
                 </p>
-                <button onClick={() => setShowSQL(!showSQL)}
-                  className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-700 transition-colors">
-                  <Database className="w-4 h-4" />
-                  {showSQL ? 'إخفاء كود SQL' : 'عرض كود SQL'}
-                </button>
+                <p className="text-sm text-red-600 font-bold mb-2">
+                  انسخ الكود أدناه كاملاً والصقه واضغط "RUN" ← يجب أن تظهر "Success"
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowSQL(!showSQL)}
+                    className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-700 transition-colors">
+                    <Database className="w-4 h-4" />
+                    {showSQL ? 'إخفاء كود SQL' : '👈 عرض كود SQL'}
+                  </button>
+                  <button onClick={handleCopySQL}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${copied ? 'bg-green-500 text-white' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'}`}>
+                    {copied ? <><Check className="w-4 h-4" /> تم النسخ!</> : <><Copy className="w-4 h-4" /> نسخ الكود</>}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -418,9 +474,7 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               <div className="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-700">4</div>
               <div>
                 <h4 className="font-bold text-gray-800 mb-1">نسخ بيانات الاتصال</h4>
-                <p className="text-sm text-gray-600">
-                  من <strong>Project Settings → API</strong> انسخ:
-                </p>
+                <p className="text-sm text-gray-600">من <strong>Project Settings</strong> (أيقونة الترس) ← <strong>API</strong>:</p>
                 <ul className="mt-2 text-sm text-gray-600 space-y-1">
                   <li className="flex items-center gap-2"><Globe className="w-3.5 h-3.5 text-blue-500" /> <strong>Project URL</strong> - رابط المشروع</li>
                   <li className="flex items-center gap-2"><Shield className="w-3.5 h-3.5 text-green-500" /> <strong>anon/public key</strong> - المفتاح العام</li>
@@ -432,8 +486,8 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
             <div className="flex gap-4">
               <div className="flex-shrink-0 w-10 h-10 bg-green-100 rounded-full flex items-center justify-center font-bold text-green-700">5</div>
               <div>
-                <h4 className="font-bold text-gray-800 mb-1">الصق البيانات أدناه واضغط اتصال!</h4>
-                <p className="text-sm text-gray-600">بعد الاتصال، اضغط "رفع البيانات للسحابة" لنقل البيانات المحلية.</p>
+                <h4 className="font-bold text-gray-800 mb-1">الصق البيانات أدناه واضغط "اتصال"</h4>
+                <p className="text-sm text-gray-600">ثم اضغط <strong>"⬆️ رفع البيانات للسحابة"</strong> لنقل بياناتك.</p>
               </div>
             </div>
           </div>
@@ -449,9 +503,7 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               <span>schema.sql</span>
             </div>
             <button onClick={handleCopySQL}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                copied ? 'bg-green-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-              }`}>
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${copied ? 'bg-green-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
               {copied ? <><Check className="w-4 h-4" /> تم النسخ!</> : <><Copy className="w-4 h-4" /> نسخ الكل</>}
             </button>
           </div>
@@ -479,7 +531,7 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               className={inputClass}
               placeholder="https://xxxxxxxx.supabase.co"
               dir="ltr" />
-            <p className="text-xs text-gray-400 mt-1">تجده في: Project Settings → API → Project URL</p>
+            <p className="text-xs text-gray-400 mt-1">Project Settings → API → Project URL</p>
           </div>
 
           <div>
@@ -492,14 +544,14 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
               className={inputClass}
               placeholder="eyJhbGciOiJIUzI1NiIs..."
               dir="ltr" />
-            <p className="text-xs text-gray-400 mt-1">تجده في: Project Settings → API → Project API keys → anon public</p>
+            <p className="text-xs text-gray-400 mt-1">Project Settings → API → Project API keys → anon public</p>
           </div>
         </div>
 
         {/* Messages */}
         {error && (
-          <div className="mt-4 bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2 animate-fadeIn border border-red-200">
-            <AlertTriangle className="w-5 h-5 flex-shrink-0" /> {error}
+          <div className="mt-4 bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm font-medium flex items-start gap-2 animate-fadeIn border border-red-200 whitespace-pre-line">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" /> {error}
           </div>
         )}
         {success && (
@@ -516,16 +568,47 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
 
           <button
             onClick={handleConnect}
-            disabled={loading || (isConnected && config.url === (JSON.parse(localStorage.getItem('supabaseConfig') || '{}')?.url || ''))}
+            disabled={loading}
             className={`px-8 py-3 rounded-xl font-bold text-white shadow-lg transition-all flex items-center gap-2 ${
               isConnected
-                ? 'bg-gray-400 cursor-not-allowed'
+                ? 'bg-emerald-500 hover:bg-emerald-600'
                 : 'bg-gradient-to-l from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 hover:shadow-emerald-200 active:scale-[0.98]'
-            }`}
+            } disabled:opacity-50`}
           >
             {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : isConnected ? <Check className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
-            {loading ? 'جاري الاتصال...' : isConnected ? 'متصل بالفعل' : 'اتصال بـ Supabase'}
+            {loading ? 'جاري الاتصال...' : isConnected ? 'إعادة الاتصال' : 'اتصال بـ Supabase'}
           </button>
+        </div>
+      </div>
+
+      {/* Quick Troubleshooting */}
+      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
+        <h4 className="font-bold text-amber-800 mb-3 flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5" />
+          حل المشاكل الشائعة
+        </h4>
+        <div className="space-y-2 text-sm text-amber-700">
+          <div className="flex items-start gap-2">
+            <span className="font-bold text-amber-600">❓</span>
+            <div>
+              <strong>البيانات لا تُحفظ؟</strong>
+              <p className="text-xs mt-0.5">تأكد من تنفيذ ملف SQL كاملاً (يتضمن تعطيل RLS ومنح الصلاحيات)</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="font-bold text-amber-600">❓</span>
+            <div>
+              <strong>خطأ "permission denied"؟</strong>
+              <p className="text-xs mt-0.5">شغّل هذا الأمر في SQL Editor: <code className="bg-amber-100 px-1 rounded" dir="ltr">ALTER TABLE اسم_الجدول DISABLE ROW LEVEL SECURITY;</code></p>
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="font-bold text-amber-600">❓</span>
+            <div>
+              <strong>الاتصال يفشل؟</strong>
+              <p className="text-xs mt-0.5">تأكد من نسخ الرابط من Project Settings → API وليس من مكان آخر</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -543,7 +626,7 @@ export default function SettingsDatabase({ onConnect, isConnected, onUploadData,
             <Shield className="w-6 h-6 text-green-600" />
           </div>
           <h4 className="font-bold text-gray-800 text-sm">آمن ومشفّر</h4>
-          <p className="text-xs text-gray-500 mt-1">بيانات محمية بـ Row Level Security</p>
+          <p className="text-xs text-gray-500 mt-1">بيانات محمية ومشفرة SSL</p>
         </div>
         <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-5 border border-purple-100 text-center">
           <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mx-auto mb-3">
